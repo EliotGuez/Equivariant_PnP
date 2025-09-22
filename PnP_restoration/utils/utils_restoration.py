@@ -467,17 +467,17 @@ def fftshear(u, a, b, device, axis=1):
     _,_,ny,nx = u.shape
     v = u.to(torch.float32)
     if axis==1:
-        Y = (a*(torch.arange(ny) - b)).to(device)
+        Y = (a*(torch.arange(ny, device=device) - b)).to(device)
         w = v.to(torch.float32)
         mx = nx//2
-        P = (torch.arange(mx,mx+nx)%nx - mx).to(device)
+        P = (torch.arange(mx,mx+nx, device=device)%nx - mx).to(device)
         Tx = torch.exp(-2.*1j*pi*Y[:,None]*P[None,:]/nx).to(device)
         v = torch.real(torch.fft.ifft(torch.fft.fft(w, dim = -1)*Tx[None,None,:,:],dim = -1))
     elif axis==0:
-        X = (a*(torch.arange(nx) - b)).to(device)
+        X = (a*(torch.arange(nx, device=device) - b)).to(device)
         w = v.to(torch.float32)
         my = ny//2
-        P = (torch.arange(my,my+ny)%ny - my).to(device)
+        P = (torch.arange(my,my+ny, device=device)%ny - my).to(device)
         Tx = torch.exp(-2.*1j*pi*X[None,:]*P[:,None]/ny).to(device)
         v = torch.real(torch.fft.ifft(torch.fft.fft(w, dim = 2)*Tx[None,None,:,:],dim = 2))
     else:
@@ -485,35 +485,35 @@ def fftshear(u, a, b, device, axis=1):
     return v
 
 
-def random_transform_subpixel_rotation(device):
-    theta = (np.random.random()-1/2)*np.pi
-    bool_0 = np.random.randint(2)
+def random_transform_subpixel_rotation(device, generator):
+    theta = (torch.rand(1, generator=generator, device=device)-1/2)*pi
+    bool_0 = torch.randint(0, 2, (1,), generator=generator, device=device).item()
     def transform(x):
         Tx = x.clone()
         if bool_0 == 1:
             Tx = torch.flip(x, dims = [2,3])
         x0 = (Tx.shape[2]+1)/2
         y0 = (Tx.shape[3]+1)/2 # center of the image
-        x1 = fftshear(Tx,-np.tan(theta/2), y0, device, axis=1)
-        x2 = fftshear(x1, np.sin(theta), x0, device, axis=0)
-        Tx = fftshear(x2,-np.tan(theta/2), y0, device, axis=1)
+        x1 = fftshear(Tx,-torch.tan(theta/2), y0, device, axis=1)
+        x2 = fftshear(x1, torch.sin(theta), x0, device, axis=0)
+        Tx = fftshear(x2,-torch.tan(theta/2), y0, device, axis=1)
         return Tx
     def inverse_transform(x, Tx):
         Tx0 = (Tx.shape[2]+1)/2
         Ty0 = (Tx.shape[3]+1)/2 # center of the image
-        Tx1 = fftshear(Tx,np.tan(theta/2), Ty0, device, axis=1)
-        Tx2 = fftshear(Tx1, -np.sin(theta), Tx0, device, axis=0)
-        y = fftshear(Tx2,np.tan(theta/2), Ty0, device, axis=1)
+        Tx1 = fftshear(Tx,torch.tan(theta/2), Ty0, device, axis=1)
+        Tx2 = fftshear(Tx1, -torch.sin(theta), Tx0, device, axis=0)
+        y = fftshear(Tx2,torch.tan(theta/2), Ty0, device, axis=1)
         if bool_0 == 1:
             y = torch.flip(y, dims = [2,3])
         return y
     return transform, inverse_transform
 
-def random_transform_rotation():
+def random_transform_rotation(device, generator):
     """
     Random quarter rotation of a torch image. 
     """
-    u = np.random.randint(4)
+    u = torch.randint(0, 4, (1,), generator=generator, device=device).item()
     def transform(x):
         if u==0:
             Tx = x
@@ -536,9 +536,9 @@ def random_transform_rotation():
         return y
     return transform, inverse_transform
 
-def random_transform_flip():
-    bool_1 = np.random.randint(2)
-    bool_2 = np.random.randint(2)
+def random_transform_flip(device, generator):
+    bool_1 = torch.randint(0, 2, (1,), generator=generator, device=device).item()
+    bool_2 = torch.randint(0, 2, (1,), generator=generator, device=device).item()
     def transform(x):
         Tx = x.clone()
         if bool_1 == 1:
@@ -550,9 +550,9 @@ def random_transform_flip():
         return transform(Tx)
     return transform, inverse_transform
 
-def random_transform_translation(n,m):
-    n1 = np.random.randint(n)
-    n2 = np.random.randint(m)
+def random_transform_translation(n,m, device, generator):
+    n1 = torch.randint(0, n, (1,), generator=generator, device=device).item()
+    n2 = torch.randint(0, m, (1,), generator=generator, device = device).item()
     def transform(x):
         x1 = x.clone()
         x1[:,:,:n-n1,:] = x[:,:,n1:,:]
