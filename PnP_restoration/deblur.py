@@ -255,15 +255,6 @@ def deblur():
                     imsave(os.path.join(save_im_path, 'img_' + str(i) + '_init.png'), single2uint(np.clip(init_im, 0, 1)))
                     # print('output image saved at ', os.path.join(save_im_path, 'img_' + str(i) + '_deblur.png'))
                     
-                    if hparams.save_video:
-                        save_mov_path = os.path.join(save_im_path, 'img_' + str(i) +"_samples_video")
-                        fps = 30
-                        duration = int(1000 * 1 / fps)
-                        im_list = []
-                        for x in x_list[::10]:
-                            im_list.append(single2uint(np.clip(x, 0, 1)))
-                        imageio.v2.mimsave(save_mov_path+".gif", im_list, duration=duration)
-
                     #save the result of the experiment
                     input_im_tensor, blur_im_tensor = array2tensor(input_im).float(), array2tensor(blur_im).float()
                     # dict = {
