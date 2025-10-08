@@ -20,7 +20,6 @@ GS_denoising/ckpts/
 **/__pycache__
 wandb/
 PnP_restoration/experiments_eliot.sh
-/datasets
 Result_ERED/
 to_save/
 
