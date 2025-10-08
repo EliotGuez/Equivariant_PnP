@@ -8,15 +8,15 @@ from argparse import ArgumentParser
 from utils.utils_restoration import rgb2y, psnr, psnr_torch, array2tensor, tensor2array, rotate_image_tensor, random_transform_noise, random_transform_rotation, random_transform_subpixel_rotation, random_transform_flip, random_transform_translation
 from skimage.metrics import structural_similarity as ssim
 from torchmetrics.functional import structural_similarity_index_measure as ssim_gpu
-
 from skimage.restoration import estimate_sigma
 from lpips import LPIPS
 import sys
 from matplotlib.ticker import MaxNLocator
 from utils.utils_restoration import imsave, single2uint, rescale
 from scipy import ndimage
-from tqdm import tqdm
+from time import time
 from brisque import BRISQUE
+
 
 # append path 
 sys.path.append('GS_denoising/')
@@ -50,6 +50,9 @@ class PnP_restoration():
             hparams.grayscale = self.hparams.grayscale
             if self.hparams.opt_alg == "PnP_PGD" or self.hparams.opt_alg == "SPnP_PGD":
                 hparams.grad_matching = False
+                if self.hparams.pretrained_checkpoint == 'GS_denoising/ckpts/Prox-DRUNet.pth':
+                    hparams.grad_matching = True
+            
             self.denoiser_model = GradMatch(hparams)
             checkpoint = torch.load(self.hparams.pretrained_checkpoint, map_location=self.device)
             self.denoiser_model.load_state_dict(checkpoint['state_dict'],strict=False)
@@ -104,7 +107,10 @@ class PnP_restoration():
         """
         if self.hparams.noise_model == 'gaussian':
             if self.hparams.degradation_mode == 'deblurring' or self.hparams.degradation_mode == 'SR':
-                return utils_sr.grad_solution_L2(x.float(), y, self.k_tensor.float(), self.sf)
+                if self.hparams.opt_alg == "RED" or self.hparams.opt_alg == "ERED" or self.hparams.opt_alg == "SNORE":
+                    return utils_sr.grad_solution_L2(x, y, self.k_tensor, self.sf)
+                else: 
+                    return utils_sr.grad_solution_L2(x.float(), y, self.k_tensor.float(), self.sf)
             else:
                 raise ValueError('degradation not implemented')
         else:
@@ -154,7 +160,7 @@ class PnP_restoration():
         elif self.hparams.noise_model == 'poisson':
             f = (img*torch.log(img/deg_y + 1e-15) + deg_y - img).sum()
         return f
-
+    
     def calculate_regul(self,x, g=None):
         '''
         Calculation of the regularization phi_sigma(y)
@@ -165,7 +171,6 @@ class PnP_restoration():
         if g is None:
             _,g,_ = self.denoise(x, self.sigma_denoiser)
         return g
-
 
     def calculate_F(self,x, img, g = None):
         '''
@@ -195,57 +200,110 @@ class PnP_restoration():
         :param sf: Super-resolution factor
         '''
         self.sf = sf
-        if self.hparams.opt_alg == "SNORE" or self.hparams.opt_alg == "SNORE_Prox" or self.hparams.opt_alg == "PnP_SGD" or self.hparams.opt_alg == "ERED":
-            self.hparams.use_backtracking = False
-            self.hparams.early_stopping = False
 
         if extract_results:
             x_list, psnr_tab, ssim_tab, brisque_tab, lpips_tab, residual_list, estimated_noise_list =  [],  [],  [], [], [], [], []
 
         # initalize parameters
-        
-        ### new part
-        if self.hparams.opt_alg in ["PnP_PGD", "SPnP_PGD"]:
-            nu = float(self.hparams.noise_level_img) / 255.0
-            self.stepsize = (float(self.hparams.stepsize) if getattr(self.hparams, "stepsize", None) is not None else 1.9) * nu**2
-            self.std =  nu
-            self.sigma_denoiser = (float(self.hparams.sigma_denoiser) if getattr(self.hparams, "sigma_denoiser", None) is not None else self.hparams.noise_level_img) / 255.0
-            self.hparams.use_backtracking = False
-            self.hparams.early_stopping = False
-            self.lamb = 0.
-            if self.hparams.noise_level_SPnP is not None:
-                self.noise_stochastic = float(self.hparams.noise_level_SPnP) / 255.0
+        if (self.hparams.opt_alg == "ERED" or self.hparams.opt_alg == "RED"):
+            if self.hparams.stepsize is None:
+                self.stepsize = 1 / self.lamb
             else:
-                self.noise_stochastic = float(self.hparams.noise_level_img) / 255.0
-            print("stepsize : ", self.hparams.stepsize, " denoiser strength : ", self.hparams.sigma_denoiser, " noise level SPnP : ", self.hparams.noise_level_SPnP)
+                self.stepsize = self.hparams.stepsize
+        ### new part
+        if self.hparams.opt_alg in ["PnP_PGD"]:
+            self.stepsize = float(self.hparams.stepsize) if getattr(self.hparams, "stepsize", None) is not None else 1.9
+            self.std = (float(self.hparams.sigma_denoiser) if getattr(self.hparams, "sigma_denoiser", None) is not None else self.hparams.noise_level_img) / 255.0
+
+        if self.hparams.opt_alg in ["SPnP_PGD"]:
+            self.stepsize = float(self.hparams.stepsize) if getattr(self.hparams, "stepsize", None) is not None else .99
+            self.std = (float(self.hparams.sigma_denoiser) if getattr(self.hparams, "sigma_denoiser", None) is not None else self.hparams.noise_level_img) / 255.0
 
         # Initialization of the algorithm
-        i = 0 # iteration counter
 
-        img_tensor = array2tensor(img).to(self.device) # for GPU computations (if GPU available)
+        img_tensor = array2tensor(img).to(self.device)
         clean_img_torch = array2tensor(clean_img).to(self.device)
-        self.initialize_prox(img_tensor, degradation) # some prox calculus that can be done outside of the loop
+        self.initialize_prox(img_tensor, degradation)
 
         # Initialization of the algorithm
         x0 = array2tensor(init_im).to(self.device)
+        if self.hparams.opt_alg == "RED" or self.hparams.opt_alg == "ERED" or self.hparams.opt_alg =="SNORE":
+            x0 = self.data_fidelity_prox_step(x0, img_tensor, self.stepsize)
         x = x0
 
         if extract_results:  # extract np images and PSNR values
             current_x_psnr = psnr_torch(clean_img_torch, x0)
             psnr_tab.append(float(current_x_psnr.cpu()))
 
-        self.backtracking_check = True
-
-        clean_img_torch_cpu = clean_img_torch.cpu()
         #for reproducibility
         generator = torch.Generator(device = self.device)
         if self.hparams.seed != None:
             generator.manual_seed(self.hparams.seed)
         else:
             generator.manual_seed(0)
-
+        
+        self.backtracking_check = True
+        # print(f'self.std = {self.std}, self.stepsize = {self.stepsize}')
         for i in range(self.maxitr):
-            x_old = x            
+            x_old = x
+            # print(f'At iteration {i}: self.stepsize = {self.stepsize}, lamb = {self.lamb}, std = {self.std}', end='\r')
+            ### algorithm 
+            if self.hparams.opt_alg == "RED":
+                if extract_results:
+                    x_old_array = tensor2array(x_old)
+                    estimated_noise_list.append(estimate_sigma(x_old_array, average_sigmas=True, channel_axis=-1))
+                _,g,Dg = self.denoise(x_old, self.std)
+                z = x_old - self.stepsize * self.lamb * Dg
+                x = z - self.stepsize * self.data_fidelity_grad(x_old, img_tensor)
+                residual = torch.norm(x - x_old)/torch.norm(x0)
+
+            
+            if self.hparams.opt_alg == "ERED":
+                if extract_results:
+                    x_old_array = tensor2array(x_old)
+                    estimated_noise_list.append(estimate_sigma(x_old_array, average_sigmas=True, channel_axis=-1))
+                
+                if self.hparams.transformation == "subpixel_rotation":
+                    transform, inverse_transform = random_transform_subpixel_rotation(self.device, generator)
+                elif self.hparams.transformation == "rotation":
+                    transform, inverse_transform = random_transform_rotation(self.device, generator)
+                elif self.hparams.transformation == "flip":
+                    transform, inverse_transform = random_transform_flip(self.device, generator)
+                elif self.hparams.transformation == "translation":
+                    transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3], self.device, generator)
+                elif self.hparams.transformation == "all_transformations":
+                    indx_transformation = np.random.randint(5)
+                    if indx_transformation == 0:
+                        transform, inverse_transform = random_transform_subpixel_rotation(self.device, generator)
+                    elif indx_transformation == 1:
+                        transform, inverse_transform = random_transform_rotation(self.device, generator)
+                    elif indx_transformation == 2:
+                        transform, inverse_transform = random_transform_flip(self.device, generator)
+                    elif indx_transformation == 3:
+                        transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3], self.device, generator)
+                    else:  # indx_transformation == 4
+                        transform, inverse_transform = random_transform_noise(self.std, x_old.shape, generator, self.device)
+                
+                x_old_transform = transform(x_old)
+                _,g,Dg = self.denoise(x_old_transform, self.std)
+                reg_grad = inverse_transform(x_old, Dg)                
+                z = x_old - self.stepsize * self.lamb * reg_grad
+                x = z - self.stepsize * self.data_fidelity_grad(x_old, img_tensor)
+                residual = torch.norm(x - x_old)/torch.norm(x0)
+
+            if self.hparams.opt_alg == "SNORE":
+                # Regularization term
+                noise = torch.normal(torch.zeros(*x_old.size()).to(self.device), std = self.std*torch.ones(*x_old.size()).to(self.device), generator = generator)
+                x_old_noise = x_old + noise
+                if extract_results:
+                    x_old_noise_array = tensor2array(x_old_noise)
+                    estimated_noise_list.append(estimate_sigma(x_old_noise_array, average_sigmas=True, channel_axis=-1))
+                _,g,Dg = self.denoise(x_old_noise, self.std)
+                # Total-Gradient step
+                x = x_old - self.stepsize * self.lamb * Dg - self.stepsize * self.data_fidelity_grad(x_old, img_tensor)
+                residual = torch.norm(x - x_old)/torch.norm(x0)
+
+
             if self.hparams.opt_alg == "PnP_PGD":
                 if extract_results:
                     x_old_array = tensor2array(x_old)
@@ -254,28 +312,27 @@ class PnP_restoration():
                     else:
                         estimated_noise_list.append(estimate_sigma(x_old_array, average_sigmas=True, channel_axis=-1))
                     
-                nu = float(self.hparams.noise_level_img) / 255.0
-                grad_f = self.data_fidelity_grad(x_old, img_tensor)/ max(nu**2, 1e-8)
+                grad_f = self.data_fidelity_grad(x_old, img_tensor)
                 z = x_old - self.stepsize* grad_f
 
                 if self.hparams.transformation == "subpixel_rotation":
-                    transform, inverse_transform = random_transform_subpixel_rotation(self.device)
+                    transform, inverse_transform = random_transform_subpixel_rotation(self.device, generator)
                 elif self.hparams.transformation == "rotation":
-                    transform, inverse_transform = random_transform_rotation()
+                    transform, inverse_transform = random_transform_rotation(self.device, generator)
                 elif self.hparams.transformation == "flip":
-                    transform, inverse_transform = random_transform_flip()
+                    transform, inverse_transform = random_transform_flip(self.device, generator)
                 elif self.hparams.transformation == "translation":
-                    transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3])
+                    transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3], self.device, generator)
                 elif self.hparams.transformation == "all_transformations":
                     indx_transformation = np.random.randint(5)
                     if indx_transformation == 0:
-                        transform, inverse_transform = random_transform_subpixel_rotation(self.device)
+                        transform, inverse_transform = random_transform_subpixel_rotation(self.device, generator)
                     elif indx_transformation == 1:
-                        transform, inverse_transform = random_transform_rotation()
+                        transform, inverse_transform = random_transform_rotation(self.device, generator)
                     elif indx_transformation == 2:
-                        transform, inverse_transform = random_transform_flip()
+                        transform, inverse_transform = random_transform_flip(self.device, generator)
                     elif indx_transformation == 3:
-                        transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3])
+                        transform, inverse_transform = random_transform_translation(x_old.shape[2], x_old.shape[3], self.device, generator)
                     else:  # indx_transformation == 4
                         transform, inverse_transform = random_transform_noise(self.std, x_old.shape, generator, self.device)
                 else:
@@ -283,81 +340,56 @@ class PnP_restoration():
 
                 if transform is not None:
                     z_t = transform(z)
-                    Dx, _, _ = self.denoise(z_t.float(), self.sigma_denoiser)
+                    Dx, _, _ = self.denoise(z_t.float(), self.std)
                     x = inverse_transform(z, Dx)  # map denoised back
                 else:
-                    Dx, _, _ = self.denoise(z.float(), self.sigma_denoiser)
+                    Dx, _, _ = self.denoise(z.float(), self.std)
                     x = Dx
                 residual = torch.norm(x - x_old)/torch.norm(x0)
 
             if self.hparams.opt_alg == "SPnP_PGD":  
-                grad_f = self.data_fidelity_grad(x_old, img_tensor)/ max(nu**2, 1e-8)
-                noise = torch.normal(mean=torch.zeros_like(x_old),std=self.noise_stochastic * torch.ones_like(x_old),generator=generator).to(self.device)
-                z = x_old - self.stepsize* grad_f + noise
-                Dx, _, _ = self.denoise(z.float(), self.noise_stochastic)
+                grad_f = self.data_fidelity_grad(x_old, img_tensor)
+                z = x_old - self.stepsize* grad_f
+                transform, _ = random_transform_noise(self.std, x_old.shape, generator, self.device)
+                z_t = transform(z)
+                Dx, _, Dg = self.denoise(z_t.float(), self.std)
                 x = Dx
                 residual = torch.norm(x - x_old)/torch.norm(x0)
 
+
             ###
-            i+=1
-            # Backtracking
-            if self.backtracking_check : # if the backtracking condition is satisfied
-                # Logging
+            if self.backtracking_check : 
                 if extract_results:
                     current_x_psnr = psnr_torch(clean_img_torch, x)
                     current_x_ssim_gpu = ssim_gpu(clean_img_torch, x, data_range=1.0)
-
                     x_list.append(x.clone())
                     psnr_tab.append(current_x_psnr)
                     residual_list.append(residual)
                     ssim_tab.append(current_x_ssim_gpu)
-
-                    # if not(self.hparams.grayscale):
-                    #     brisque_tab.append(brisque.score(out_x))
-                    # clean_img_tensor, out_x_tensor = array2tensor(clean_img).float(), array2tensor(out_x).float()
-                    # if self.hparams.lpips and not(self.hparams.grayscale):
-                    #     current_x_lpips = loss_lpips.forward(clean_img_tensor, out_x_tensor).item()
-                    #     lpips_tab.append(current_x_lpips)
                     if self.hparams.lpips and not(self.hparams.grayscale):
-                    # if not(self.hparams.grayscale):
-                        current_x_lpips = loss_lpips.forward(clean_img_torch_cpu, x.clone().cpu())
-                        lpips_tab.append(current_x_lpips)
-        # output_img = tensor2array(x.cpu())
-        # output_psnr = psnr(clean_img, output_img)
-        # output_ssim = ssim(clean_img, output_img, data_range = 1, channel_axis = 2)
-        output_psnr = psnr_torch(clean_img_torch, x)
-        output_ssim = ssim_gpu(clean_img_torch, x, data_range=1.0)
-        if not(self.hparams.grayscale):
-            # output_brisque = brisque.score(np.clip(output_img, 0, 1))
-            # clean_img_tensor, output_img_tensor = array2tensor(clean_img).float(), array2tensor(output_img).float()
-            # output_lpips = loss_lpips.forward(clean_img_tensor, output_img_tensor).item()
-            # pass both clean_img_torch and x to cpu
-            x_cpu = x.cpu()
-            output_lpips = loss_lpips.forward(clean_img_torch_cpu, x_cpu)
-        else:
-            output_brisque = output_lpips = 0
-        ###
+                        current_x_lpips = loss_lpips.forward(clean_img_torch, x)
+                        lpips_tab.append(current_x_lpips) 
+
+
         Dy,_,_ = self.denoise(x, self.std)
-        # output_den_img = tensor2array(Dy.cpu())
-        # output_den_psnr = psnr(clean_img, output_den_img)
-        # output_den_ssim = ssim(clean_img, output_den_img, data_range = 1, channel_axis = 2)
-        # output_den_img_tensor = array2tensor(output_den_img).float()
+        if  self.hparams.opt_alg in ["ERED", "RED", "SNORE"]:
+            x = Dy
+        output_psnr, output_ssim = psnr_torch(clean_img_torch, x), ssim_gpu(clean_img_torch, x, data_range=1.0)
+        output_den_psnr, output_den_ssim = psnr_torch(clean_img_torch, Dy), ssim_gpu(clean_img_torch, Dy, data_range=1.0)
 
-        output_den_psnr = psnr_torch(clean_img_torch, Dy)
-        output_den_ssim = ssim_gpu(clean_img_torch, Dy, data_range=1.0)
 
         if not(self.hparams.grayscale):
-            # output_den_brisque = brisque.score(np.clip(output_den_img, 0, 1))
-            # output_den_lpips = loss_lpips.forward(clean_img_tensor, output_den_img_tensor).item()
-            output_den_lpips = loss_lpips.forward(clean_img_torch_cpu, Dy.cpu())
+            clean_img_torch_cpu = clean_img_torch.cpu()
+            x_cpu, Dy_cpu = x.cpu().float(), Dy.cpu().float()
+            output_lpips = loss_lpips.forward(clean_img_torch_cpu, x_cpu)
+            output_den_lpips = loss_lpips.forward(clean_img_torch_cpu, Dy_cpu)
         else:
-            output_den_brisque = output_den_lpips = 0
+            output_lpips = output_den_lpips= 0
+        ###
 
         if extract_results:
-            # return output_img, tensor2array(x0.cpu()), output_psnr, output_ssim, output_lpips, output_brisque, output_den_img, output_den_psnr, output_den_ssim, output_den_brisque, output_den_img_tensor, output_den_lpips, i, x_list, z_list, np.array(Dg_list), np.array(psnr_tab), np.array(ssim_tab), np.array(brisque_tab), np.array(lpips_tab), np.array(g_list), np.array(F_list), np.array(nabla_F_list), np.array(f_list), np.array(lamb_tab), np.array(std_tab), np.array(estimated_noise_list), np.array(residual_list)
             return x, x0, output_psnr, output_ssim, output_lpips, Dy, output_den_psnr, output_den_ssim, output_den_lpips, i, x_list, psnr_tab, ssim_tab, lpips_tab, estimated_noise_list, residual_list, clean_img_torch
         else:
-            # return output_img, tensor2array(x0.cpu()), output_psnr, output_ssim, output_lpips, output_brisque, output_den_img, output_den_psnr, output_den_ssim, output_den_brisque, output_den_img_tensor, output_den_lpips, i
             return x, x0, output_psnr, output_ssim, output_lpips, Dy, output_den_psnr, output_den_ssim, output_den_lpips, i
         
         
@@ -563,7 +595,6 @@ class PnP_restoration():
         parser.add_argument('--noise_model', type=str,  default='gaussian')
         parser.add_argument('--dataset_name', type=str, default='set3c')
         parser.add_argument('--noise_level_img', type=float)
-        parser.add_argument('--noise_level_SPnP', type=float, default=None,help="Noise level (in [0,255] scale) for SPnP_PGD.If None, defaults to noise_level_img.")
         parser.add_argument('--maxitr', type=int)
         parser.add_argument('--stepsize', type=float)
         parser.add_argument('--lamb', type=float)
@@ -583,7 +614,7 @@ class PnP_restoration():
         parser.add_argument('--crit_conv', type=str, default='cost')
         parser.add_argument('--thres_conv', type=float, default=1e-5)
         parser.add_argument('--no_backtracking', dest='use_backtracking', action='store_false')
-        parser.set_defaults(use_backtracking=True)
+        parser.set_defaults(use_backtracking=False)
         parser.add_argument('--eta_backtracking', type=float, default=0.9)
         parser.add_argument('--gamma_backtracking', type=float, default=0.1)
         parser.add_argument('--inpainting_init', dest='inpainting_init', action='store_true')
@@ -622,6 +653,3 @@ class PnP_restoration():
         parser.add_argument('--transformation', type=str, choices=['rotation', 'subpixel_rotation', 'flip', 'translation','all_transformations'], help='Specify random transformation for ERED algorithm.', default=None)
         parser.add_argument('--opt_alg', dest='opt_alg', choices=['SNORE', 'Data_GD', 'SNORE_Prox', 'RED_Prox', 'ARED_Prox', 'RED', 'PnP_SGD', 'PnP_PGD', 'SPnP_PGD', 'ERED', 'ERED_Prox'], help='Specify optimization algorithm')
         return parser
-
-
-

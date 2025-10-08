@@ -17,43 +17,38 @@ import matplotlib
 matplotlib.use('Agg')  # Use non-interactive backend
 import matplotlib.pyplot as plt
 loss_lpips = LPIPS(net='alex', version='0.1')
-brisque = BRISQUE(url=False)    
+brisque = BRISQUE(url=False)
+
 # # Define sweep config
 # sweep_configuration = {
 #     "method": "grid",
 #     "name": "pnp_pgd_parameter_optimization",
 #     "metric": {"goal": "maximize", "name": "output_psnr"},
 #     "parameters": {
+#         "stepsize" : {"values": [1.5, 1.9]},
 #         "denoiser_strength": {"values": [2., 5.]},
 #     },
 # }
 
-sweep_configuration = {
-    "method": "random",
-    "name": "pnp_pgd_rot",
-    "metric": {"goal": "maximize", "name": "output_psnr"},
-    "parameters": {
-        "stepsize": {
-            "distribution": "uniform",
-            "min": 1.75,    # Much wider range to explore
-            "max": 1.95
-        },
-        # "denoiser_strength": {
-        #     "distribution": "uniform", 
-        #     "min": 4.5,    # Explore from very low to high
-        #     "max": 7.0
-        # },
-        "noise_stochastic": {
-            "distribution": "uniform", 
-            "min": 4.0,    # Explore from no noise to high noise    
-            "max": 9.
-        },
-    },
-}
-
-# # # # Initialize sweep by passing in config.
-sweep_id = wandb.sweep(sweep=sweep_configuration, project="pnp_pgd_rot")
-
+# sweep_configuration = {
+#     "method": "random",
+#     "name": "spnp_pgd",
+#     "metric": {"goal": "maximize", "name": "output_psnr"},
+#     "parameters": {
+#         "stepsize": {
+#             "distribution": "uniform",
+#             "min": 1.5,    # Much wider range to explore
+#             "max": 1.95
+#         },
+#         # "denoiser_strength": {
+#         #     "distribution": "uniform", 
+#         #     "min": 1.,    # Explore from very low to high
+#         #     "max": 10.0
+#         # },
+#     },
+# }
+# Initialize sweep by passing in config.
+# sweep_id = wandb.sweep(sweep=sweep_configuration, project="pnp_pgd_optimization")
 def deblur():
 
     parser = ArgumentParser()
@@ -126,24 +121,21 @@ def deblur():
 
             # definition of parameters setting : by default or defined by user
             PnP_module.lamb, PnP_module.std, PnP_module.maxitr, PnP_module.thres_conv, PnP_module.stepsize, PnP_module.std_0, PnP_module.std_end, PnP_module.lamb_0, PnP_module.lamb_end, PnP_module.beta = get_parameters(hparams.noise_level_img, PnP_module.hparams, k_index=k_index, degradation_mode='deblur')
+            # print(PnP_module.lamb, PnP_module.stepsize)
             PnP_module.sigma_denoiser = PnP_module.std
             if hparams.use_wandb:
                 if hasattr(wandb.config, "denoiser_strength"):
                     hparams.sigma_denoiser = wandb.config.denoiser_strength 
                 if hasattr(wandb.config, "stepsize"):
                     hparams.stepsize = wandb.config.stepsize
-                if hasattr(wandb.config, "noise_stochastic"):
-                    hparams.noise_level_SPnP = wandb.config.noise_stochastic
                 PnP_module.sigma_denoiser = hparams.sigma_denoiser
                 PnP_module.stepsize = hparams.stepsize
-                PnP_module.noise_stochastic = hparams.noise_level_SPnP
-
 
 
 
 
             #create the folder to save experimental results
-            w_to_save = "D:\PnP"
+            w_to_save = "/tsi/data_education/Ladjal/Tancrede_Eliot_MVA_2025"
             exp_out_path = hparams.exp_out_path
             exp_out_path_full = os.path.join(w_to_save, exp_out_path)
             exp_out_path = create_out_dir(exp_out_path_full, hparams, k_index = k_index)
@@ -185,7 +177,7 @@ def deblur():
                     output_den_img_gpu, output_den_psnr_gpu, output_den_ssim_gpu, output_den_lpips_gpu, \
                     n_it, x_list_gpu, psnr_tab_gpu, ssim_tab_gpu, lpips_tab_gpu, estimated_noise_list, \
                     residual_tab_gpu, clean_img_torch = PnP_module.restore(blur_im.copy(),init_im.copy(),input_im.copy(),k, extract_results=True)
-
+                    
                     deblur_im = tensor2array(deblur_im_gpu.cpu())
                     init_im = tensor2array(init_im_gpu.cpu())
                     output_psnr = float(output_psnr_gpu.cpu())
@@ -227,7 +219,7 @@ def deblur():
                     output_den_brisque = brisque.score(np.clip(output_den_img, 0, 1)) if not hparams.grayscale else 0
                 
                 # print(f'N iterations: {n_it}')
-                print('PSNR / SSIM / LPIPS / BRISQUE: {:.2f}dB / {:.2f} / {:.2f} / {:.2f}'.format(output_psnr, output_ssim, output_lpips, output_brisque))
+                print('PSNR / SSIM / LPIPS / BRISQUE: {:.3f}dB / {:.3f} / {:.3f} / {:.3f}'.format(output_psnr, output_ssim, output_lpips, output_brisque))
                 
 
                 psnr_k_list.append(output_psnr)
@@ -242,7 +234,7 @@ def deblur():
 
                 if hparams.extract_curves:
                     # Create curves
-                    PnP_module.update_curves(x_list, psnr_tab, ssim_tab, brisque_tab, lpips_tab, [], [], [], [],  [], [], [], estimated_noise_list, residual_tab)
+                    PnP_module.update_curves(x_list, psnr_tab, ssim_tab, brisque_tab, lpips_tab, [], [], F_list, [],  [], [], [], estimated_noise_list, residual_tab)
 
                 if hparams.extract_images:
                     # Save images
@@ -255,15 +247,6 @@ def deblur():
                     imsave(os.path.join(save_im_path, 'img_' + str(i) + '_init.png'), single2uint(np.clip(init_im, 0, 1)))
                     # print('output image saved at ', os.path.join(save_im_path, 'img_' + str(i) + '_deblur.png'))
                     
-                    if hparams.save_video:
-                        save_mov_path = os.path.join(save_im_path, 'img_' + str(i) +"_samples_video")
-                        fps = 30
-                        duration = int(1000 * 1 / fps)
-                        im_list = []
-                        for x in x_list[::10]:
-                            im_list.append(single2uint(np.clip(x, 0, 1)))
-                        imageio.v2.mimsave(save_mov_path+".gif", im_list, duration=duration)
-
                     #save the result of the experiment
                     input_im_tensor, blur_im_tensor = array2tensor(input_im).float(), array2tensor(blur_im).float()
                     # dict = {
@@ -418,8 +401,8 @@ def deblur():
     if hparams.use_wandb:
         wandb.log(
             {
-                "stepsize": PnP_module.stepsize/PnP_module.std**2,
-                "denoiser_strength": PnP_module.sigma_denoiser*255.,
+                "stepsize": PnP_module.stepsize,
+                "denoiser_strength": PnP_module.sigma_denoiser,
                 "maxitr": PnP_module.maxitr,
                 "output_psnr" : np.mean(np.array(psnr_list)),
                 "output_ssim" : np.mean(np.array(ssim_list)),
@@ -430,23 +413,23 @@ def deblur():
     
     data = np.array(data)
 
-    if hparams.use_wandb :
-        table = wandb.Table(data=data, columns=['k', 'psnr', 'n_it'])
-        for i, metric in enumerate(['psnr', 'n_it']):
-            wandb.log({
-                f'{metric}_plot': wandb.plot.scatter(
-                    table, 'k', metric,
-                    title=f'{metric} vs. k'),
-                f'average_{metric}': np.mean(data[:,i+1])
-            },
-            step = 0)
-    plt.close('all')
-    if hparams.use_wandb:
-        wandb.finish() 
+    # if hparams.use_wandb :
+    #     table = wandb.Table(data=data, columns=['k', 'psnr', 'n_it'])
+    #     for i, metric in enumerate(['psnr', 'n_it']):
+    #         wandb.log({
+    #             f'{metric}_plot': wandb.plot.scatter(
+    #                 table, 'k', metric,
+    #                 title=f'{metric} vs. k'),
+    #             f'average_{metric}': np.mean(data[:,i+1])
+    #         },
+    #         step = 0)
+    # plt.close('all')
+    # if hparams.use_wandb:
+    #     wandb.finish() 
     return np.mean(np.array(psnr_list))
 
 # # # Start sweep job.
-wandb.agent(sweep_id, function=deblur, count=5)
+# wandb.agent(sweep_id, function=deblur, count=8)
 
 if __name__ == '__main__':
     deblur()
