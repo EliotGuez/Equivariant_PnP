@@ -27,3 +27,5 @@ to_save/
 compute_statistics.py
 parse_pnp_results.py
 test.ipynb
+*.out
+*.err

@@ -72,8 +72,10 @@ def get_parameters(noise_level_img, hparams, k_index=0, degradation_mode='deblur
                 lamb_0 = 0.1
             if maxitr == None:
                 maxitr = 1500
+            std = sigma_denoiser /255.
     
     return lamb, std, maxitr, thres_conv, stepsize, std_0, std_end, lamb_0, lamb_end, beta
+
 
 def create_out_dir(exp_out_path, hparams, k_index = 0):
     """
@@ -160,10 +162,6 @@ def create_out_dir(exp_out_path, hparams, k_index = 0):
         if not os.path.exists(exp_out_path_new):
             os.mkdir(exp_out_path_new)
     ###
-    if hparams.noise_level_SPnP != None:
-        exp_out_path_new = os.path.join(exp_out_path_new, "noise_level_SPnP_"+str(hparams.noise_level_SPnP))
-        if not os.path.exists(exp_out_path_new):
-            os.mkdir(exp_out_path_new)
     if hparams.transformation != None:
         exp_out_path_new = os.path.join(exp_out_path_new, "transformation_"+str(hparams.transformation))
         if not os.path.exists(exp_out_path_new):

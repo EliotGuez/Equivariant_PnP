@@ -45,11 +45,6 @@ brisque = BRISQUE(url=False)
 #         #     "min": 1.,    # Explore from very low to high
 #         #     "max": 10.0
 #         # },
-#         "noise_stochastic": {
-#             "distribution": "uniform", 
-#             "min": 1.0,    # Explore from no noise to high noise
-#             "max": 10.
-#         },
 #     },
 # }
 # Initialize sweep by passing in config.
@@ -133,11 +128,8 @@ def deblur():
                     hparams.sigma_denoiser = wandb.config.denoiser_strength 
                 if hasattr(wandb.config, "stepsize"):
                     hparams.stepsize = wandb.config.stepsize
-                if hasattr(wandb.config, "noise_stochastic"):
-                    hparams.noise_level_SPnP = wandb.config.noise_stochastic
                 PnP_module.sigma_denoiser = hparams.sigma_denoiser
                 PnP_module.stepsize = hparams.stepsize
-                PnP_module.noise_stochastic = hparams.noise_level_SPnP
 
 
 
