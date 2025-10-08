@@ -131,14 +131,9 @@ def deblur():
                 PnP_module.sigma_denoiser = hparams.sigma_denoiser
                 PnP_module.stepsize = hparams.stepsize
 
-
-
-
             #create the folder to save experimental results
-            w_to_save = "/tsi/data_education/Ladjal/Tancrede_Eliot_MVA_2025"
             exp_out_path = hparams.exp_out_path
-            exp_out_path_full = os.path.join(w_to_save, exp_out_path)
-            exp_out_path = create_out_dir(exp_out_path_full, hparams, k_index = k_index)
+            exp_out_path = create_out_dir(exp_out_path, hparams, k_index = k_index)
 
             for i in range(min(len(input_paths),hparams.n_images)): # For each image
 
