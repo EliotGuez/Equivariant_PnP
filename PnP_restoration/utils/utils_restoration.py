@@ -114,6 +114,13 @@ def create_out_dir(exp_out_path, hparams, k_index = 0):
         exp_out_path_new = os.path.join(exp_out_path_new, hparams.opt_alg)
         if not os.path.exists(exp_out_path_new):
             os.mkdir(exp_out_path_new)
+    if hparams.degradation_mode == "MRI":
+        exp_out_path_new = os.path.join(exp_out_path_new, "acceleration_factor_"+str(hparams.acceleration_factor))
+        if not os.path.exists(exp_out_path_new):
+            os.mkdir(exp_out_path_new)
+        exp_out_path_new = os.path.join(exp_out_path_new, hparams.opt_alg)
+        if not os.path.exists(exp_out_path_new):
+            os.mkdir(exp_out_path_new)
     if hparams.denoiser_type != "GSDenoiser":
         exp_out_path_new = os.path.join(exp_out_path_new, hparams.denoiser_type)
         if not os.path.exists(exp_out_path_new):
@@ -576,3 +583,75 @@ def random_transform_noise(std, x_shape, generator, device):
     def inverse_transform(x,Tx):
         return Tx
     return transform, inverse_transform
+
+def genMask(imgSize, numLines, device='cpu'):
+    """
+    Generate a mask for MRI reconstruction in torch.
+    It is a translation in torch of the code proposed in https://github.com/wustl-cig/bcred/tree/master
+    
+    Args:
+        imgSize (tuple): (high, width) of the image; need to be a multiple of 2
+        numLines (int): number of ligne to draw
+        device (str): 'cpu' or 'cuda'
+    
+    Returns:
+        torch.BoolTensor: binary mask of size imgSize
+    """
+    H, W = imgSize
+    if H % 2 != 0 or W % 2 != 0:
+        raise ValueError("image must be even sized!")
+    
+    center = torch.tensor([H/2 + 1, W/2 + 1], device=device)
+    freqMax = np.ceil(np.sqrt((H/2)**2 + (W/2)**2))
+    
+    # angles of the lines
+    ang = torch.linspace(0, np.pi, steps=numLines+1, device=device)[:-1]  # we remove the last one to avoid multiples
+    
+    mask = torch.zeros(imgSize, dtype=torch.bool, device=device)
+    
+    # relative coordonates
+    offsets = torch.arange(-freqMax, freqMax+1, device=device)
+    
+    for theta in ang:
+        cos_t, sin_t = torch.cos(theta), torch.sin(theta)
+        # Float coordonnates
+        ix = center[1] + offsets * cos_t
+        iy = center[0] + offsets * sin_t
+        
+        # Integer coordonates
+        ix = torch.floor(ix + 0.5).long()
+        iy = torch.floor(iy + 0.5).long()
+        
+        # Filter to keep the valid indexes
+        valid = (ix >= 1) & (ix <= W) & (iy >= 1) & (iy <= H)
+        ix = ix[valid] - 1  # to go to the 1-based index
+        iy = iy[valid] - 1
+        
+        mask[iy, ix] = True
+    
+    return mask
+
+def fft2c(x):
+    """
+    2D centered FFT (unitary)
+    """
+    return torch.fft.fftshift(
+        torch.fft.fft2(
+            torch.fft.ifftshift(x, dim=(-2, -1)),
+            norm="ortho"
+        ),
+        dim=(-2, -1)
+    )
+
+def ifft2c(k):
+    """
+    2D centered iFFT (unitary)
+    """
+    return torch.fft.fftshift(
+        torch.fft.ifft2(
+            torch.fft.ifftshift(k, dim=(-2, -1)),
+            norm="ortho"
+        ),
+        dim=(-2, -1)
+    )
+

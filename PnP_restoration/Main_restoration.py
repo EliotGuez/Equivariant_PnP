@@ -643,7 +643,7 @@ class PnP_restoration():
         parser.set_defaults(grayscale=False)
         parser.add_argument('--no_early_stopping', dest='early_stopping', action='store_false')
         parser.set_defaults(early_stopping=True)
-        parser.add_argument('--exp_out_path', type=str, default="Result_ERED")
+        parser.add_argument('--exp_out_path', type=str, default="./results")
         parser.add_argument('--weight_Dg', type=float, default=1.)
         parser.add_argument('--n_init', type=int, default=10)
         parser.add_argument('--act_mode_denoiser', type=str, default='E')
