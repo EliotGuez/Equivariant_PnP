@@ -78,7 +78,6 @@ class GradMatch(pl.LightningModule):
         Dg = torch.autograd.grad(g, x, torch.ones_like(g), create_graph=True, only_inputs=True)[0]
         return Dg, N, g
 
-
     def forward(self, x, sigma):
         '''
         Denoising with Gradient Step Denoiser
