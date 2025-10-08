@@ -18,9 +18,14 @@ GS_denoising/logs/
 GS_denoising/ckpts/
 *.zip
 **/__pycache__
+wandb/
+PnP_restoration/experiments_eliot.sh
+/datasets
 Result_ERED/
 to_save/
 
 compute_statistics.py
 parse_pnp_results.py
 test.ipynb
+*.out
+*.err
