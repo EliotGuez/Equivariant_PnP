@@ -12,7 +12,7 @@ from skimage.restoration import estimate_sigma
 from lpips import LPIPS
 import sys
 from matplotlib.ticker import MaxNLocator
-from utils.utils_restoration import imsave, single2uint, rescale
+from utils.utils_restoration import imsave, single2uint, rescale, fft2c, ifft2c
 from scipy import ndimage
 from time import time
 from brisque import BRISQUE
@@ -85,6 +85,9 @@ class PnP_restoration():
             k = degradation
             self.k_tensor = torch.tensor(k).to(self.device)
             self.FB, self.FBC, self.F2B, self.FBFy = utils_sr.pre_calculate_prox(img, self.k_tensor, self.sf)
+        elif self.Pb == "MRI":
+            self.M = degradation
+            self.neg_M = torch.ones(self.M.shape).to(self.device) - 1*self.M
 
     def data_fidelity_prox_step(self, x, y, stepsize):
         '''
@@ -93,6 +96,8 @@ class PnP_restoration():
         if self.hparams.noise_model == 'gaussian':
             if self.hparams.degradation_mode == 'deblurring':
                 px = utils_sr.prox_solution_L2(x, self.FB, self.FBC, self.F2B, self.FBFy, stepsize, self.sf)
+            elif self.hparams.degradation_mode == 'MRI':
+                px = ifft2c(((1/(1+stepsize))*self.M+self.neg_M)*(fft2c(x)+stepsize*self.M*y))
             else:
                 ValueError('Degradation not treated')
         else :  
@@ -111,6 +116,8 @@ class PnP_restoration():
                     return utils_sr.grad_solution_L2(x, y, self.k_tensor, self.sf)
                 else: 
                     return utils_sr.grad_solution_L2(x.float(), y, self.k_tensor.float(), self.sf)
+            elif self.hparams.degradation_mode == 'MRI':
+                return torch.real(ifft2c(self.M * (fft2c(x) - y)))
             else:
                 raise ValueError('degradation not implemented')
         else:
@@ -122,29 +129,33 @@ class PnP_restoration():
         '''
         if self.hparams.noise_model == 'gaussian':
             grad = utils_sr.grad_solution_L2(x, y, self.k_tensor, self.sf)
+        elif self.hparams.noise_model == 'MRI':
+            grad = torch.real(ifft2c(self.M * (fft2c(x) - y)))
         else:
             raise ValueError('noise model not implemented')
         return x - stepsize*grad, grad
         
-    def A(self,y):
+    def A(self,x):
         '''
         Calculation A*x with A the linear degradation operator 
         '''
         if self.hparams.degradation_mode == 'deblurring':
-            y = utils_sr.G(y, self.k_tensor, sf=1)
+            Ax = utils_sr.G(x, self.k_tensor, sf=1)
+        elif self.Pb == 'MRI':
+            Ax = self.M[None,None,:,:] * fft2c(x)
         else:
             raise ValueError('degradation not implemented')
-        return y  
+        return Ax
 
-    def At(self,y):
+    def At(self,x):
         '''
         Calculation A*x with A the linear degradation operator 
         '''
         if self.hparams.degradation_mode == 'deblurring':
-            y = utils_sr.Gt(y, self.k_tensor, sf=1)
+            Atx = utils_sr.Gt(x, self.k_tensor, sf=1)
         else:
             raise ValueError('degradation not implemented')
-        return y  
+        return Atx  
 
 
     def calculate_data_term(self,y,img):
@@ -195,7 +206,7 @@ class PnP_restoration():
         :param img: Degraded image
         :param init_im: Initialization of the algorithm
         :param clean_img: ground-truth clean image
-        :param degradation: 2D blur kernel for deblurring and SR, mask for inpainting
+        :param degradation: 2D blur kernel for deblurring and SR, mask for inpainting and MRI
         :param extract_results: Extract information for subsequent image or curve saving
         :param sf: Super-resolution factor
         '''
