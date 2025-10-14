@@ -14,6 +14,7 @@ venv/
 *.pyc
 PnP_restoration/experiments.sh
 PnP_restoration/generate_fig.py
+PnP_restoration/results/
 GS_denoising/logs/
 GS_denoising/ckpts/
 *.zip

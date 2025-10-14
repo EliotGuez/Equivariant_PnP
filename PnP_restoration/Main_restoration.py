@@ -16,8 +16,7 @@ from utils.utils_restoration import imsave, single2uint, rescale, fft2c, ifft2c
 from scipy import ndimage
 from time import time
 from brisque import BRISQUE
-
-
+from tqdm import tqdm
 # append path 
 sys.path.append('GS_denoising/')
 sys.path.append('PnP_restoration/')
@@ -41,6 +40,7 @@ class PnP_restoration():
         Initialize the denoiser model with the given pretrained ckpt
         '''
         if self.hparams.denoiser_type == "GSDenoiser":
+            sys.path.insert(1, '../GS_denoising/')
             from lightning_GSDRUNet import GradMatch
             parser2 = ArgumentParser(prog='utils_restoration.py')
             parser2 = GradMatch.add_model_specific_args(parser2)
@@ -50,7 +50,7 @@ class PnP_restoration():
             hparams.grayscale = self.hparams.grayscale
             if self.hparams.opt_alg == "PnP_PGD" or self.hparams.opt_alg == "SPnP_PGD":
                 hparams.grad_matching = False
-                if self.hparams.pretrained_checkpoint == 'GS_denoising/ckpts/Prox-DRUNet.pth':
+                if self.hparams.pretrained_checkpoint == '../GS_denoising/ckpts/Prox-DRUNet.pth':
                     hparams.grad_matching = True
             
             self.denoiser_model = GradMatch(hparams)
@@ -85,8 +85,8 @@ class PnP_restoration():
             k = degradation
             self.k_tensor = torch.tensor(k).to(self.device)
             self.FB, self.FBC, self.F2B, self.FBFy = utils_sr.pre_calculate_prox(img, self.k_tensor, self.sf)
-        elif self.Pb == "MRI":
-            self.M = degradation
+        elif self.hparams.degradation_mode == "MRI":
+            self.M = torch.tensor(degradation).to(self.device)
             self.neg_M = torch.ones(self.M.shape).to(self.device) - 1*self.M
 
     def data_fidelity_prox_step(self, x, y, stepsize):
@@ -97,7 +97,7 @@ class PnP_restoration():
             if self.hparams.degradation_mode == 'deblurring':
                 px = utils_sr.prox_solution_L2(x, self.FB, self.FBC, self.F2B, self.FBFy, stepsize, self.sf)
             elif self.hparams.degradation_mode == 'MRI':
-                px = ifft2c(((1/(1+stepsize))*self.M+self.neg_M)*(fft2c(x)+stepsize*self.M*y))
+                px = torch.real(ifft2c(((1/(1+stepsize))*self.M+self.neg_M)*(fft2c(x)+stepsize*self.M*y)))
             else:
                 ValueError('Degradation not treated')
         else :  
@@ -141,7 +141,7 @@ class PnP_restoration():
         '''
         if self.hparams.degradation_mode == 'deblurring':
             Ax = utils_sr.G(x, self.k_tensor, sf=1)
-        elif self.Pb == 'MRI':
+        elif self.hparams.degradation_mode == 'MRI':
             Ax = self.M[None,None,:,:] * fft2c(x)
         else:
             raise ValueError('degradation not implemented')
@@ -255,10 +255,10 @@ class PnP_restoration():
         
         self.backtracking_check = True
         # print(f'self.std = {self.std}, self.stepsize = {self.stepsize}')
-        for i in range(self.maxitr):
+        for i in tqdm(range(self.maxitr)):
             x_old = x
             # print(f'At iteration {i}: self.stepsize = {self.stepsize}, lamb = {self.lamb}, std = {self.std}', end='\r')
-            ### algorithm 
+            ### algorithms
             if self.hparams.opt_alg == "RED":
                 if extract_results:
                     x_old_array = tensor2array(x_old)
@@ -599,16 +599,16 @@ class PnP_restoration():
 
     def add_specific_args(parent_parser):
         parser = ArgumentParser(parents=[parent_parser], add_help=False)
-        parser.add_argument('--dataset_path', type=str, default='datasets')
+        parser.add_argument('--dataset_path', type=str, default='../datasets')
         parser.add_argument('--gpu_number', type=int, default=0)
-        parser.add_argument('--pretrained_checkpoint', type=str,default='GS_denoising/ckpts/GSDRUNet.ckpt')
+        parser.add_argument('--pretrained_checkpoint', type=str,default='../GS_denoising/ckpts/GSDRUNet.ckpt')
         parser.add_argument('--im_init', type=str)
         parser.add_argument('--noise_model', type=str,  default='gaussian')
         parser.add_argument('--dataset_name', type=str, default='set3c')
         parser.add_argument('--noise_level_img', type=float)
-        parser.add_argument('--maxitr', type=int)
+        parser.add_argument('--maxitr', type=int, default = 100)
         parser.add_argument('--stepsize', type=float)
-        parser.add_argument('--lamb', type=float)
+        parser.add_argument('--lamb', type=float, default = 1.)
         parser.add_argument('--beta', type=float)
         parser.add_argument('--std_0', type=float)
         parser.add_argument('--std_end', type=float)
@@ -617,7 +617,7 @@ class PnP_restoration():
         parser.add_argument('--num_noise', type=int, default=1)
         parser.add_argument('--annealing_number', type=int, default=16)
         parser.add_argument('--last_itr', type=int, default=300)
-        parser.add_argument('--sigma_denoiser', type=float)
+        parser.add_argument('--sigma_denoiser', type=float, default = 5.)
         parser.add_argument('--seed', type=int)
         parser.add_argument('--lpips', dest='lpips', action='store_true')
         parser.set_defaults(lpips=False)
@@ -662,5 +662,5 @@ class PnP_restoration():
         parser.add_argument('--rot', dest='rot', action='store_true')
         parser.set_defaults(rot=False)
         parser.add_argument('--transformation', type=str, choices=['rotation', 'subpixel_rotation', 'flip', 'translation','all_transformations'], help='Specify random transformation for ERED algorithm.', default=None)
-        parser.add_argument('--opt_alg', dest='opt_alg', choices=['SNORE', 'Data_GD', 'SNORE_Prox', 'RED_Prox', 'ARED_Prox', 'RED', 'PnP_SGD', 'PnP_PGD', 'SPnP_PGD', 'ERED', 'ERED_Prox'], help='Specify optimization algorithm')
+        parser.add_argument('--opt_alg', dest='opt_alg', choices=['SNORE', 'Data_GD', 'SNORE_Prox', 'RED_Prox', 'ARED_Prox', 'RED', 'PnP_SGD', 'PnP_PGD', 'SPnP_PGD', 'ERED', 'ERED_Prox'], help='Specify optimization algorithm', default='RED')
         return parser
