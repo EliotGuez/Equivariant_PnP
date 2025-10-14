@@ -81,7 +81,7 @@ def deblur():
     else : 
         k_list = []
         # If no specific kernel is given, load the 8 motion blur kernels
-        kernel_path = os.path.join('PnP_restoration', 'kernels', 'Levin09.mat')
+        kernel_path = os.path.join('kernels', 'Levin09.mat')
         kernels = hdf5storage.loadmat(kernel_path)['kernels']
         # Kernels follow the order given in the paper (Table 2). The 8 first kernels are motion blur kernels, the 9th kernel is uniform and the 10th Gaussian.
         for k_index in range(10) :
