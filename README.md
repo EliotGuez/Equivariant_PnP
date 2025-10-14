@@ -23,7 +23,7 @@ python deblur.py --dataset_name "CBSD10" --opt_alg "RED" --stepsize 1.5 --sigma_
 ```
 
 ## Structure of the code
-...
+```
 ├── datasets/        
 │ ├── CBSD10/             # 10 images of the dataset CBSD68
 │ ├── CBSD68/
@@ -33,6 +33,7 @@ python deblur.py --dataset_name "CBSD10" --opt_alg "RED" --stepsize 1.5 --sigma_
 │ ├── deblur.py           # Code for image deblurring
 │ ├── MRI.py              # Code for MRI reconstruction
 └ └── Main_restoration.py # Code with the forward models and algorithms
-...
+```
+
 ## Acknowledgement
 This code is based on the repository : - [GS DRUNet](https://github.com/samuro95/gspnp?tab=readme-ov-file)
