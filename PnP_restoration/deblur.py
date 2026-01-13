@@ -176,7 +176,7 @@ def deblur():
                     deblur_im_gpu, init_im_gpu, output_psnr_gpu, output_ssim_gpu, output_lpips_gpu, \
                     output_den_img_gpu, output_den_psnr_gpu, output_den_ssim_gpu, output_den_lpips_gpu, \
                     n_it, x_list_gpu, psnr_tab_gpu, ssim_tab_gpu, lpips_tab_gpu, estimated_noise_list, \
-                    residual_tab_gpu, clean_img_torch = PnP_module.restore(blur_im.copy(),init_im.copy(),input_im.copy(),k, extract_results=True)
+                    residual_tab_gpu, F_tab, f_tab, clean_img_torch = PnP_module.restore(blur_im.copy(),init_im.copy(),input_im.copy(),k, extract_results=True)
                     
                     deblur_im = tensor2array(deblur_im_gpu.cpu())
                     init_im = tensor2array(init_im_gpu.cpu())
@@ -219,7 +219,7 @@ def deblur():
                     output_den_brisque = brisque.score(np.clip(output_den_img, 0, 1)) if not hparams.grayscale else 0
                 
                 # print(f'N iterations: {n_it}')
-                print('PSNR / SSIM / LPIPS / BRISQUE: {:.3f}dB / {:.3f} / {:.3f} / {:.3f}'.format(output_psnr, output_ssim, output_lpips, output_brisque))
+                print('PSNR / SSIM / LPIPS: {:.3f}dB / {:.3f} / {:.3f}'.format(output_psnr, output_ssim, output_lpips))
                 
 
                 psnr_k_list.append(output_psnr)
@@ -294,7 +294,7 @@ def deblur():
                     #     }
                     dict = {
                             'GT' : input_im,
-                            'x_list' : x_list,
+                            # 'x_list' : x_list,
                             'estimated_noise_GT' : estimate_sigma(input_im, average_sigmas=True, channel_axis=-1),
                             'BRISQUE_GT' : brisque.score(input_im),
                             'Deblur' : deblur_im,
@@ -323,6 +323,8 @@ def deblur():
                             'output_den_brisque' : output_den_brisque, 
                             'estimated_noise_list' : estimated_noise_list,
                             'residual_list' : residual_tab,
+                            'F_tab' : F_tab,
+                            'f_tab' : f_tab,
                         }
                     np.save(os.path.join(exp_out_path, 'dict_' + str(i) + '_results'), dict)
                 

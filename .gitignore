@@ -12,7 +12,7 @@ venv/
 *.gz
 *.npy
 *.pyc
-PnP_restoration/experiments.sh
+*.sh
 PnP_restoration/generate_fig.py
 GS_denoising/logs/
 GS_denoising/ckpts/
@@ -29,3 +29,4 @@ parse_pnp_results.py
 test.ipynb
 *.out
 *.err
+figures/

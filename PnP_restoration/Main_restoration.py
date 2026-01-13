@@ -17,7 +17,6 @@ from scipy import ndimage
 from time import time
 from brisque import BRISQUE
 
-
 # append path 
 sys.path.append('GS_denoising/')
 sys.path.append('PnP_restoration/')
@@ -52,7 +51,10 @@ class PnP_restoration():
                 hparams.grad_matching = False
                 if self.hparams.pretrained_checkpoint == 'GS_denoising/ckpts/Prox-DRUNet.pth':
                     hparams.grad_matching = True
-            
+            self.is_prox_drunet = (
+                getattr(self.hparams, "pretrained_checkpoint", "") == "GS_denoising/ckpts/Prox-DRUNet.pth"
+                or "Prox-DRUNet" in getattr(self.hparams, "pretrained_checkpoint", "")
+            ) # need it to compuet functionals
             self.denoiser_model = GradMatch(hparams)
             checkpoint = torch.load(self.hparams.pretrained_checkpoint, map_location=self.device)
             self.denoiser_model.load_state_dict(checkpoint['state_dict'],strict=False)
@@ -83,7 +85,8 @@ class PnP_restoration():
         '''
         if self.hparams.degradation_mode == 'deblurring':
             k = degradation
-            self.k_tensor = torch.tensor(k).to(self.device)
+            # self.k_tensor = torch.tensor(k).to(self.device)
+            self.k_tensor = torch.tensor(k, dtype=torch.float32, device=self.device)
             self.FB, self.FBC, self.F2B, self.FBFy = utils_sr.pre_calculate_prox(img, self.k_tensor, self.sf)
 
     def data_fidelity_prox_step(self, x, y, stepsize):
@@ -171,23 +174,62 @@ class PnP_restoration():
         if g is None:
             _,g,_ = self.denoise(x, self.sigma_denoiser)
         return g
-
-    def calculate_F(self,x, img, g = None):
+    
+    def calculate_regul_prox(self,y,xpre,g):
         '''
-        Calculation of the objective function value f(x) + lamb*g(x)
-        :param x: Point where to evaluate F
-        :param img: Degraded image
+        Calculation of the regularization (1/tau)*phi_sigma(y)
+        :param y: Point where to evaluate
+        :param x: D^{-1}(y)
         :param g: Precomputed regularization function value at x
-        :return: F(x)
+        :return: regul(y)
         '''
-        regul = self.calculate_regul(x, g=g)
+        regul = (1 / self.stepsize) * (g - 0.5 * torch.norm(xpre - y, p=2) ** 2)
+        return regul
+    
+    # def calculate_F(self,x, img, g = None):
+    #     '''
+    #     Calculation of the objective function value f(x) + lamb*g(x)
+    #     :param x: Point where to evaluate F
+    #     :param img: Degraded image
+    #     :param g: Precomputed regularization function value at x
+    #     :return: F(x)
+    #     '''
+    #     regul = self.calculate_regul(x, g=g)
+    #     if self.hparams.no_data_term:
+    #         F = regul
+    #         f = torch.zeros_like(F)
+    #     else:
+    #         f = self.calculate_data_term(x,img)
+    #         F = f + self.lamb * regul
+    #     return f.item(), F.item()
+    
+    def calculate_F(self, y, img, g=None, xpre=None):
+        """
+        Unified objective:
+        - GS-DRUNet:   F(y) = f(y) + phi_sigma(y) (lambda=1)
+        - Prox-DRUNet: F(y) = f(y) + (1/stepsize)*(phi_sigma(xpre) - 0.5||xpre - y||^2)
+        """
+
+        # ----- data term -----
         if self.hparams.no_data_term:
-            F = regul
-            f = torch.zeros_like(F)
+            f = torch.zeros((), device=y.device, dtype=y.dtype)
         else:
-            f = self.calculate_data_term(x,img)
-            F = f + self.lamb * regul
+            f = self.calculate_data_term(y, img)
+
+        # ----- GS DRUNet -----
+        if not self.is_prox_drunet:
+            regul = self.calculate_regul(y, g=g)   # returns phi_sigma(y)
+            F = f + regul
+            return f.item(), F.item()
+
+        # ----- Prox-DRUNet -----
+        if g is None or xpre is None:
+            raise ValueError("Prox-DRUNet requires g(xpre) and xpre = D^{-1}(y).")
+
+        regul = self.calculate_regul_prox(y, xpre, g)
+        F = f + regul
         return f.item(), F.item()
+
 
     def restore(self, img, init_im, clean_img, degradation, extract_results=False, sf=1):
         '''
@@ -200,9 +242,9 @@ class PnP_restoration():
         :param sf: Super-resolution factor
         '''
         self.sf = sf
-
         if extract_results:
             x_list, psnr_tab, ssim_tab, brisque_tab, lpips_tab, residual_list, estimated_noise_list =  [],  [],  [], [], [], [], []
+            f_tab, g_tab, F_tab = [], [], []
 
         # initalize parameters
         if (self.hparams.opt_alg == "ERED" or self.hparams.opt_alg == "RED"):
@@ -220,7 +262,7 @@ class PnP_restoration():
             self.std = (float(self.hparams.sigma_denoiser) if getattr(self.hparams, "sigma_denoiser", None) is not None else self.hparams.noise_level_img) / 255.0
 
         # Initialization of the algorithm
-
+        print(f'self.std: {self.std}, self.stepsize: {self.stepsize}')
         img_tensor = array2tensor(img).to(self.device)
         clean_img_torch = array2tensor(clean_img).to(self.device)
         self.initialize_prox(img_tensor, degradation)
@@ -244,6 +286,11 @@ class PnP_restoration():
         
         self.backtracking_check = True
         # print(f'self.std = {self.std}, self.stepsize = {self.stepsize}')
+
+        if torch.cuda.is_available():
+            torch.cuda.reset_peak_memory_stats(self.device)
+
+
         for i in range(self.maxitr):
             x_old = x
             # print(f'At iteration {i}: self.stepsize = {self.stepsize}, lamb = {self.lamb}, std = {self.std}', end='\r')
@@ -340,11 +387,33 @@ class PnP_restoration():
 
                 if transform is not None:
                     z_t = transform(z)
-                    Dx, _, _ = self.denoise(z_t.float(), self.std)
+                    
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize(self.device)
+                    t0 = time.time()
+
+                    Dx, g, _ = self.denoise(z_t.float(), self.std)
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize(self.device)
+                    t1 = time.time()
+                    if i % 100 == 0: 
+                        print(f'Denoising time per iteration: {(t1 - t0)*1000:.2f} ms.')
                     x = inverse_transform(z, Dx)  # map denoised back
+                    xpre = z_t
                 else:
-                    Dx, _, _ = self.denoise(z.float(), self.std)
+
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize(self.device)
+                    t0 = time.time()
+                    Dx, g, _ = self.denoise(z.float(), self.std)
+
+                    if torch.cuda.is_available():
+                        torch.cuda.synchronize(self.device)
+                    t1 = time.time()
+                    if i % 100 == 0: 
+                        print(f'Denoising time per iteration: {(t1 - t0)*1000:.2f} ms.')                    
                     x = Dx
+                    xpre= z
                 residual = torch.norm(x - x_old)/torch.norm(x0)
 
             if self.hparams.opt_alg == "SPnP_PGD":  
@@ -352,8 +421,20 @@ class PnP_restoration():
                 z = x_old - self.stepsize* grad_f
                 transform, _ = random_transform_noise(self.std, x_old.shape, generator, self.device)
                 z_t = transform(z)
-                Dx, _, Dg = self.denoise(z_t.float(), self.std)
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize(self.device)
+                t0 = time.time()
+
+                Dx, g, Dg = self.denoise(z_t.float(), self.std)
+
+                if torch.cuda.is_available():
+                    torch.cuda.synchronize(self.device)
+                t1 = time.time()
+                if i % 100 == 0: 
+                    print(f'Denoising time per iteration: {(t1 - t0)*1000:.2f} ms.')
                 x = Dx
+                xpre=z_t
                 residual = torch.norm(x - x_old)/torch.norm(x0)
 
 
@@ -369,10 +450,19 @@ class PnP_restoration():
                     if self.hparams.lpips and not(self.hparams.grayscale):
                         current_x_lpips = loss_lpips.forward(clean_img_torch, x)
                         lpips_tab.append(current_x_lpips) 
+                    
+                    if self.hparams.opt_alg in ["PnP_PGD","SPnP_PGD"]:
+                        f_val, F_val = self.calculate_F(y=x, img=img_tensor, g=g, xpre=xpre if self.is_prox_drunet else None)
+                    else:
+                        f_val, F_val = self.calculate_F(y=x, img=img_tensor, g=g)
+
+                    f_tab.append(f_val)
+                    F_tab.append(F_val)    
+
 
 
         Dy,_,_ = self.denoise(x, self.std)
-        if  self.hparams.opt_alg in ["ERED", "RED", "SNORE"]:
+        if  self.hparams.opt_alg in ["PnP_PGD", "SPnP_PGD", "ERED", "RED", "SNORE"]:
             x = Dy
         output_psnr, output_ssim = psnr_torch(clean_img_torch, x), ssim_gpu(clean_img_torch, x, data_range=1.0)
         output_den_psnr, output_den_ssim = psnr_torch(clean_img_torch, Dy), ssim_gpu(clean_img_torch, Dy, data_range=1.0)
@@ -387,8 +477,13 @@ class PnP_restoration():
             output_lpips = output_den_lpips= 0
         ###
 
+        if torch.cuda.is_available():
+            peak_alloc = torch.cuda.max_memory_allocated(self.device) / (1024**2)
+            peak_reserved = torch.cuda.max_memory_reserved(self.device) / (1024**2)
+            print(f"[Memory] Peak allocated: {peak_alloc:.1f} MB | Peak reserved: {peak_reserved:.1f} MB")
+
         if extract_results:
-            return x, x0, output_psnr, output_ssim, output_lpips, Dy, output_den_psnr, output_den_ssim, output_den_lpips, i, x_list, psnr_tab, ssim_tab, lpips_tab, estimated_noise_list, residual_list, clean_img_torch
+            return x, x0, output_psnr, output_ssim, output_lpips, Dy, output_den_psnr, output_den_ssim, output_den_lpips, i, x_list, psnr_tab, ssim_tab, lpips_tab, estimated_noise_list, residual_list, F_tab, f_tab, clean_img_torch
         else:
             return x, x0, output_psnr, output_ssim, output_lpips, Dy, output_den_psnr, output_den_ssim, output_den_lpips, i
         
