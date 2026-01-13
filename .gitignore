@@ -14,13 +14,12 @@ venv/
 *.pyc
 *.sh
 PnP_restoration/generate_fig.py
+PnP_restoration/results/
 GS_denoising/logs/
-GS_denoising/ckpts/
 *.zip
 **/__pycache__
 wandb/
 PnP_restoration/experiments_eliot.sh
-/datasets
 Result_ERED/
 to_save/
 
@@ -30,3 +29,4 @@ test.ipynb
 *.out
 *.err
 figures/
+datasets/

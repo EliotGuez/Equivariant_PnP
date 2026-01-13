@@ -81,7 +81,7 @@ def deblur():
     else : 
         k_list = []
         # If no specific kernel is given, load the 8 motion blur kernels
-        kernel_path = os.path.join('PnP_restoration', 'kernels', 'Levin09.mat')
+        kernel_path = os.path.join('kernels', 'Levin09.mat')
         kernels = hdf5storage.loadmat(kernel_path)['kernels']
         # Kernels follow the order given in the paper (Table 2). The 8 first kernels are motion blur kernels, the 9th kernel is uniform and the 10th Gaussian.
         for k_index in range(10) :
@@ -131,14 +131,9 @@ def deblur():
                 PnP_module.sigma_denoiser = hparams.sigma_denoiser
                 PnP_module.stepsize = hparams.stepsize
 
-
-
-
             #create the folder to save experimental results
-            w_to_save = "/tsi/data_education/Ladjal/Tancrede_Eliot_MVA_2025"
             exp_out_path = hparams.exp_out_path
-            exp_out_path_full = os.path.join(w_to_save, exp_out_path)
-            exp_out_path = create_out_dir(exp_out_path_full, hparams, k_index = k_index)
+            exp_out_path = create_out_dir(exp_out_path, hparams, k_index = k_index)
 
             for i in range(min(len(input_paths),hparams.n_images)): # For each image
 

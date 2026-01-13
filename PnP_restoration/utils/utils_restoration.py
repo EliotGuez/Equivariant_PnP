@@ -4,7 +4,8 @@ from scipy.fftpack import dct, idct
 import torch
 import cv2
 import os 
-from math import pi
+import decimal
+from math import pi, ceil, cos, sin
 
 
 def get_parameters(noise_level_img, hparams, k_index=0, degradation_mode='deblur'):
@@ -109,6 +110,13 @@ def create_out_dir(exp_out_path, hparams, k_index = 0):
             os.mkdir(exp_out_path_new)
     if hparams.degradation_mode == "despeckle":
         exp_out_path_new = os.path.join(exp_out_path_new, "L_"+str(hparams.L))
+        if not os.path.exists(exp_out_path_new):
+            os.mkdir(exp_out_path_new)
+        exp_out_path_new = os.path.join(exp_out_path_new, hparams.opt_alg)
+        if not os.path.exists(exp_out_path_new):
+            os.mkdir(exp_out_path_new)
+    if hparams.degradation_mode == "MRI":
+        exp_out_path_new = os.path.join(exp_out_path_new, "acceleration_factor_"+str(hparams.acceleration_factor))
         if not os.path.exists(exp_out_path_new):
             os.mkdir(exp_out_path_new)
         exp_out_path_new = os.path.join(exp_out_path_new, hparams.opt_alg)
@@ -290,8 +298,8 @@ def psnr(img1,img2) :
 def psnr_torch(img1,img2) :
     if not img1.shape == img2.shape:
         raise ValueError('Input images must have the same dimensions.')
-    mse = torch.mean((img1 - img2) ** 2)
-    return 20 * torch.log10( 1. / torch.sqrt(mse))
+    mse = torch.mean((torch.real(img1 - img2)) ** 2)
+    return 20 * torch.log10(1. / torch.sqrt(mse))
 
 def matlab_style_gauss2D(shape=(3,3),sigma=0.5):
     """
@@ -576,3 +584,109 @@ def random_transform_noise(std, x_shape, generator, device):
     def inverse_transform(x,Tx):
         return Tx
     return transform, inverse_transform
+
+# def genMask(imgSize, numLines):
+#         if imgSize[0] % 2 != 0 or imgSize[1] % 2 != 0:
+#             sys.stderr.write('image must be even sized! ')
+#             sys.exit(1)
+#         center = np.ceil(imgSize[0]/2)+1, np.ceil(imgSize[1]/2)+1
+#         freqMax = ceil(np.sqrt((imgSize[0]/2)**2+(imgSize[1]/2)**2))
+#         ang = np.linspace(0, pi, num=numLines+1)
+#         mask = np.zeros(imgSize, dtype=bool)
+        
+#         for indLine in range(0,numLines):
+#             ix = np.zeros(2*freqMax + 1)
+#             iy = np.zeros(2*freqMax + 1)
+#             ind = np.zeros(2*freqMax + 1, dtype=bool)
+#             for i in range(2*freqMax + 1):
+#                 ix[i] = decimal.Decimal(center[1] + (-freqMax+i)*cos(ang[indLine])).quantize(0,rounding=decimal.ROUND_HALF_UP)
+#             for i in range(2*freqMax + 1):
+#                 iy[i] = decimal.Decimal(center[0] + (-freqMax+i)*sin(ang[indLine])).quantize(0,rounding=decimal.ROUND_HALF_UP)
+                 
+#             for k in range(2*freqMax + 1):
+#                 if (ix[k] >= 1) & (ix[k] <= imgSize[1]) & (iy[k] >= 1) & (iy[k] <= imgSize[0]):
+#                     ind[k] = True
+#                 else:
+#                     ind[k] = False
+                
+#             ix = ix[ind]
+#             iy = iy[ind]
+#             ix = ix.astype(np.int64)
+#             iy = iy.astype(np.int64)
+            
+#             for i in range(len(ix)):
+#                 mask[iy[i]-1][ix[i]-1] = True
+        
+#         return mask
+
+
+def genMask(imgSize, numLines):
+    if imgSize[0] % 2 != 0 or imgSize[1] % 2 != 0:
+        raise ValueError("Image must be even sized")
+
+    mask = np.zeros(imgSize, dtype=bool)
+    center = np.array(imgSize) // 2
+    freqMax = int(np.ceil(np.linalg.norm(center)))
+    angles = np.linspace(0, np.pi, num=numLines, endpoint=False)
+
+    r = np.arange(-freqMax, freqMax + 1)
+
+    for theta in angles:
+        x = np.rint(center[1] + r * np.cos(theta)).astype(int)
+        y = np.rint(center[0] + r * np.sin(theta)).astype(int)
+
+        valid = (x >= 0) & (x < imgSize[1]) & (y >= 0) & (y < imgSize[0])
+        mask[y[valid], x[valid]] = True
+
+    return mask
+
+
+def fft2c_numpy(x):
+    """
+    2D centered FFT (unitary)
+    """
+    return np.fft.fftshift(
+        np.fft.fft2(
+            np.fft.ifftshift(x, axes=(0, 1)),
+            norm="ortho"
+        ),
+        axes=(0, 1)
+    )
+
+def ifft2c_numpy(k):
+    """
+    2D centered iFFT (unitary)
+    """
+    return np.fft.fftshift(
+        np.fft.ifft2(
+            np.fft.ifftshift(k, axes=(0, 1)),
+            norm="ortho"
+        ),
+        axes=(0, 1)
+    )
+
+
+def fft2c(x):
+    """
+    2D centered FFT (unitary)
+    """
+    return torch.fft.fftshift(
+        torch.fft.fft2(
+            torch.fft.ifftshift(x, dim=(-2, -1)),
+            norm="ortho"
+        ),
+        dim=(-2, -1)
+    )
+
+def ifft2c(k):
+    """
+    2D centered iFFT (unitary)
+    """
+    return torch.fft.fftshift(
+        torch.fft.ifft2(
+            torch.fft.ifftshift(k, dim=(-2, -1)),
+            norm="ortho"
+        ),
+        dim=(-2, -1)
+    )
+
