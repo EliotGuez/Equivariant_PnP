@@ -21,6 +21,8 @@ For image deblurring you can run the following command
 ```
 python deblur.py --dataset_name "CBSD10" --opt_alg "RED" --stepsize 1.5 --sigma_denoiser 7. --maxitr 400
 ```
+Note that for PnP based methods (PnP, EPnP, SnoPnP), we parametrize the iterations with the gradient step $\tau$: $x_{k+1} = D_{\sigma}(x_k - \tau \nabla f(x_k))$.
+In this case, $\tau = 1 / {\lambda}$ if you take the values reported in the table 6 of the paper.
 
 ## Structure of the code
 ```
