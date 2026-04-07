@@ -38,4 +38,4 @@ In this case, $\tau = 1 / {\lambda}$ if you take the values reported in the tabl
 ```
 
 ## Acknowledgement
-This code is based on the repository : - [GS DRUNet](https://github.com/samuro95/gspnp?tab=readme-ov-file)
+This code is based on the repository : - [Equivariant Denoiser for Image Restoration](https://github.com/Marien-RENAUD/EquivariantPnP) 
