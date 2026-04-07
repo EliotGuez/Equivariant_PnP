@@ -38,4 +38,6 @@ In this case, $\tau = 1 / {\lambda}$ if you take the values reported in the tabl
 ```
 
 ## Acknowledgement
-This code is based on the repository : - [Equivariant Denoiser for Image Restoration](https://github.com/Marien-RENAUD/EquivariantPnP) 
+This code is based on the repository : 
+  - [Gradient Step Denoiser for convergent Plug-and-Play (GS-PnP](https://github.com/samuro95/GSPnP) 
+  - [Equivariant Denoiser for Image Restoration](https://github.com/Marien-RENAUD/EquivariantPnP) 
